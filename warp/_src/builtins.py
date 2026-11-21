@@ -14698,6 +14698,31 @@ add_builtin(
 )
 
 add_builtin(
+    "linear_tid",
+    input_types={},
+    value_type=int64,
+    export=False,
+    group="Utility",
+    doc="""Return the current thread's linear index across the entire launch.
+
+    Call this function inside a kernel launched by Warp.
+
+    :func:`tid` supports extents up to ``2**31`` on each axis it returns, including in
+    kernels that also call ``wp.linear_tid()``. Use ``wp.linear_tid()`` on its own to
+    index launches with larger axis extents.
+
+    Returns:
+        The thread index in ``[0, N)``, where ``N`` is the product of the launch dimensions.
+        For a multidimensional launch, this is the row-major flattened index, with the last
+        dimension varying fastest.
+
+    Example:
+        In a launch with ``dim=(3, 5)``, the thread at coordinates ``(1, 2)`` gets ``7``
+        (``1 * 5 + 2``) from ``wp.linear_tid()``. In that thread, ``i = wp.tid()`` gives ``1``.""",
+    is_differentiable=False,
+)
+
+add_builtin(
     "tid",
     input_types={},
     value_type=[int, int],
