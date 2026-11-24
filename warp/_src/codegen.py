@@ -1764,19 +1764,37 @@ def iter_call_callable_arg_targets(adj, func, call_node, callable_arg_values=Non
         arguments or defaults.
     """
 
-    if not isinstance(func, warp._src.context.Function) or func.is_builtin():
+    if not isinstance(func, warp._src.context.Function):
         return
+
+    # Function parameters are type-erased. User functions spell those slots with
+    # `wp.Function`; some built-ins spell them with `Callable`, as `wp.tile_map()` does.
+    is_builtin = func.is_builtin()
+
+    def accepts_function(arg_type):
+        return warp._src.types.is_warp_function_annotation(arg_type) or (
+            is_builtin and warp._src.types.is_builtin_callable_annotation(arg_type)
+        )
 
     arg_types, kwarg_types, resolved = resolve_call_arg_types(adj, call_node, callable_arg_values)
 
     # Binding is costly; skip it unless an overload can take a function. Templates can when
     # instantiated, and a custom get_overload() may dispatch anywhere. Checked after resolving
     # the arguments, since resolving them may register overloads.
-    if (
+    if is_builtin:
+        # Built-ins carry their specializations in `overloads` and have no
+        # `user_overloads`/`user_templates`.
+        if not any(
+            accepts_function(arg_type)
+            for candidate in (func, *func.overloads)
+            for arg_type in candidate.input_types.values()
+        ):
+            return
+    elif (
         type(func).get_overload is warp._src.context.Function.get_overload
         and not func.user_templates
         and not any(
-            warp._src.types.is_warp_function_annotation(arg_type)
+            accepts_function(arg_type)
             for candidate in (func, *func.user_overloads.values())
             for arg_type in candidate.input_types.values()
         )
@@ -1794,7 +1812,7 @@ def iter_call_callable_arg_targets(adj, func, call_node, callable_arg_values=Non
         bound_arg_nodes = bind_call_arg_nodes(func_candidate, call_node)
 
         for arg_name, arg_node in bound_arg_nodes.items():
-            if not warp._src.types.is_warp_function_annotation(func_candidate.input_types.get(arg_name)):
+            if not accepts_function(func_candidate.input_types.get(arg_name)):
                 continue
 
             callable_func = resolve_callable_arg_target(adj, arg_node, callable_arg_values)
@@ -7650,15 +7668,16 @@ class Adjoint:
                     if not func.is_builtin():
                         # User-defined calls contribute their transitive implementation hash.
                         functions[func] = None
-
-                        # Function targets are passed as values, so they must be
-                        # added explicitly to the function reference set. Built-in
-                        # targets are hash inputs too, but they are filtered out by
-                        # module dependency discovery because they have no module.
-                        for callable_func in iter_call_callable_arg_targets(adj, func, node, callable_arg_values):
-                            functions[callable_func] = None
                     elif _builtin_affects_module_hash(func):
                         functions[func] = None
+
+                    # Function targets are passed as values, so they must be added
+                    # explicitly to the function reference set. Built-in targets are
+                    # hash inputs too, but they are filtered out by module dependency
+                    # discovery because they have no module. Built-in callees take
+                    # function targets as well, as `wp.tile_map(op, ...)` does.
+                    for callable_func in iter_call_callable_arg_targets(adj, func, node, callable_arg_values):
+                        functions[callable_func] = None
                 elif isinstance(func, Struct):
                     # calling struct constructor
                     types[func] = None

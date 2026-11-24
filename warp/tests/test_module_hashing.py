@@ -440,6 +440,43 @@ class TestModuleHashing(unittest.TestCase):
             axis_overload.native_func = original_native_func
             axis_overload.adjoint_uses_template_args = original_flag
 
+    def test_builtin_function_arg_hashed(self):
+        """A ``wp.func`` passed to a built-in must contribute to the module hash.
+
+        Built-ins such as ``wp.tile_map()`` take the function through a ``Callable``
+        parameter. Without it in the key, two kernels differing only in a constant
+        captured by that function hash the same, so the second silently runs the code
+        compiled for the first, in-process and through the kernel cache.
+        """
+
+        def make_tile_map(k: int):
+            @wp.func
+            def add_k(x: int) -> int:
+                return x + k
+
+            @wp.kernel(module="unique")
+            def kernel(a: wp.array[int], out: wp.array[int]):
+                wp.tile_store(out, wp.tile_map(add_k, wp.tile_load(a, shape=4)))
+
+            return kernel.module
+
+        def make_tile_reduce(k: int):
+            @wp.func
+            def add_k(x: int, y: int) -> int:
+                return x + y + k
+
+            @wp.kernel(module="unique")
+            def kernel(a: wp.array[int], out: wp.array[int]):
+                total = wp.tile_reduce(add_k, wp.tile_load(a, shape=4))
+                out[0] = total[0]
+
+            return kernel.module
+
+        for make in (make_tile_map, make_tile_reduce):
+            with self.subTest(builtin=make.__name__):
+                self.assertEqual(make(5).hash_module(), make(5).hash_module())
+                self.assertNotEqual(make(5).hash_module(), make(7).hash_module())
+
     def test_inline_hint_hashed(self):
         """Verify each ``@wp.func`` inline hint produces a distinct module hash.
 
